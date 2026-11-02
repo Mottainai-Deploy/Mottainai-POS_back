@@ -287,7 +287,7 @@ public sealed class OutboxSyncService(
                             managers.Parameters.AddWithValue(payload.StoreId);
                             await using var reader = await managers.ExecuteReaderAsync(ct);
                             while (await reader.ReadAsync(ct))
-                                recipients.Add(new PosApprovalRecipient(reader.GetInt64(0), reader.GetInt64(1)));
+                                recipients.Add(new PosApprovalRecipient(reader.GetInt32(0), reader.GetInt32(1)));
                         }
                         await scope.CommitAsync(ct);
                         if (recipients.Count == 0)
