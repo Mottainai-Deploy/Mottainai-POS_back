@@ -37,7 +37,7 @@ public sealed class AuthController(LocalStore store, PostgresRequestScopeFactory
             if (terminalCode is null && configuredTerminalId is null) return StatusCode(503, new { error = "terminal_not_configured" });
             await using var profileCommand = new NpgsqlCommand("""
                 SELECT u.user_id,e.employee_id,e.store_id,e.name,r.name,r.permission_level,
-                       e.email,e.phone,e.hire_date,s.name,t.terminal_id
+                       e.email,e.phone,e.hire_date,s.name,t.terminal_id,t.name
                 FROM mottainai.app_user u
                 JOIN mottainai.employee e ON e.employee_id=u.employee_id
                 JOIN mottainai.employee_role r ON r.role_id=e.role_id
@@ -52,7 +52,8 @@ public sealed class AuthController(LocalStore store, PostgresRequestScopeFactory
             if (!await reader.ReadAsync(ct)) return Unauthorized(new { error = "operator_not_authorized" });
             var userId = reader.GetInt32(0); var employeeId = reader.GetInt32(1); var storeId = reader.GetInt32(2);
             var selectedTerminalId=reader.GetInt32(10);
-            var profileJson = JsonSerializer.Serialize(new { id=employeeId,name=reader.GetString(3),role=reader.GetString(4),email=reader.IsDBNull(6)?null:reader.GetString(6),phone=reader.IsDBNull(7)?null:reader.GetString(7),hireDate=reader.GetDateTime(8),storeId,storeName=reader.GetString(9),terminalId=selectedTerminalId });
+            var terminalName=reader.GetString(11);
+            var profileJson = JsonSerializer.Serialize(new { id=employeeId,name=reader.GetString(3),role=reader.GetString(4),email=reader.IsDBNull(6)?null:reader.GetString(6),phone=reader.IsDBNull(7)?null:reader.GetString(7),hireDate=reader.GetDateTime(8),storeId,storeName=reader.GetString(9),terminalId=selectedTerminalId,terminalName });
             var permissionJson = JsonSerializer.Serialize(new { level = reader.GetInt32(5), role = reader.GetString(4) });
             await reader.DisposeAsync();
 

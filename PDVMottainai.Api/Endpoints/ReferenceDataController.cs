@@ -186,10 +186,13 @@ public sealed class ReferenceDataController(OfflineCacheRepository cache, Postgr
         return product is null ? NotFound() : Ok(ToResponse(product,null,null));
     }
 
-    public sealed record CustomerSearchRequest(string AccountToken);
+    public sealed record CustomerSearchRequest(string? AccountToken = null, string? Cpf = null);
     [HttpPost("/customers/search")]
     public async Task<IActionResult> CustomerSearch(CustomerSearchRequest request, CancellationToken ct)
     {
+        if (!string.IsNullOrWhiteSpace(request.Cpf))
+            return await CustomerSearchByCpf(new CpfCustomerSearchRequest(request.Cpf), ct);
+
         var accountToken=request.AccountToken;
         if (string.IsNullOrWhiteSpace(accountToken) || !System.Text.RegularExpressions.Regex.IsMatch(accountToken, "^AUTH_SHA256_[0-9A-Fa-f]{64}$", System.Text.RegularExpressions.RegexOptions.CultureInvariant))
             return BadRequest(new { error = "tokenized_mottainai_account_id_required" });
@@ -230,7 +233,7 @@ public sealed class ReferenceDataController(OfflineCacheRepository cache, Postgr
         else
         {
             var digits = System.Text.RegularExpressions.Regex.Replace(cpfValue, "\\D", string.Empty);
-            if (digits.Length != 11)
+            if (!IsValidCpf(digits))
                 return BadRequest(new { error = "valid_cpf_required" });
             cpfToken = $"CPF_SHA256_{LocalStore.Sha256(digits).ToUpperInvariant()}";
         }
@@ -262,6 +265,25 @@ public sealed class ReferenceDataController(OfflineCacheRepository cache, Postgr
 
         var cachedCustomer = await cache.GetCustomerAsync(tokenHash, ct);
         return cachedCustomer is null ? NotFound() : Ok(cachedCustomer);
+    }
+
+    private static bool IsValidCpf(string digits)
+    {
+        if (digits.Length != 11 || digits.All(digit => digit == digits[0]))
+            return false;
+
+        var firstSum = 0;
+        for (var index = 0; index < 9; index++)
+            firstSum += (digits[index] - '0') * (10 - index);
+        var firstDigit = firstSum % 11 < 2 ? 0 : 11 - firstSum % 11;
+        if (digits[9] - '0' != firstDigit)
+            return false;
+
+        var secondSum = 0;
+        for (var index = 0; index < 10; index++)
+            secondSum += (digits[index] - '0') * (11 - index);
+        var secondDigit = secondSum % 11 < 2 ? 0 : 11 - secondSum % 11;
+        return digits[10] - '0' == secondDigit;
     }
 
     private static ProductResponse ToResponse(CachedProduct product,decimal? promotionalPrice,int? promotionId)=>new(product.ProductId,product.Sku,product.Barcode,product.Name,product.UnitMeasure,product.NormalPrice,promotionalPrice,promotionId,product.Active,product.Version,product.CachedAt);
