@@ -96,6 +96,23 @@ CREATE TABLE IF NOT EXISTS local_cash_movement (
     FOREIGN KEY(shift_id) REFERENCES local_shift(local_shift_id)
 );
 
+CREATE TABLE IF NOT EXISTS cash_movement_notification_outbox (
+    event_id TEXT PRIMARY KEY,
+    local_movement_id INTEGER NOT NULL REFERENCES local_cash_movement(local_movement_id),
+    terminal_id INTEGER NOT NULL,
+    employee_id INTEGER NOT NULL,
+    payload_ciphertext BLOB NOT NULL,
+    state TEXT NOT NULL DEFAULT 'PENDING' CHECK(state IN ('PENDING','DELIVERED')),
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_error_code TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    delivered_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS ix_cash_movement_notification_pending
+    ON cash_movement_notification_outbox(state, created_at);
+
 CREATE TABLE IF NOT EXISTS local_sale (
     local_sale_id INTEGER PRIMARY KEY,
     remote_sale_id INTEGER,
