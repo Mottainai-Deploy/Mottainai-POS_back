@@ -52,7 +52,7 @@ paths:
   /sales/{saleId}:
     get: { summary: Consultar venda ou carrinho, parameters: [{ in: path, name: saleId, required: true, schema: { type: integer } }], responses: { '200': { description: Venda e itens }, '404': { description: Não encontrada } } }
   /sales/{saleId}/items:
-    post: { summary: Adicionar produto ao rascunho com preço normal ou promoção elegível, parameters: [{ in: path, name: saleId, required: true, schema: { type: integer } }], responses: { '202': { description: Item enfileirado }, '404': { description: Produto fora do cache } } }
+    post: { summary: Adicionar produto ao rascunho com preço normal ou promoção elegível, parameters: [{ in: path, name: saleId, required: true, schema: { type: integer } }], responses: { '202': { description: A resposta inclui unitPrice (preço aplicado), normalPrice, promotionalPrice (null sem promoção) e promotionId (null sem promoção) }, '404': { description: Produto fora do cache } } }
   /sales/{saleId}/items/{itemId}:
     patch: { summary: Alterar quantidade do item, parameters: [{ in: path, name: saleId, required: true, schema: { type: integer } }, { in: path, name: itemId, required: true, schema: { type: integer } }], responses: { '202': { description: Alteração enfileirada }, '404': { description: Item não encontrado } } }
   /approvals:
