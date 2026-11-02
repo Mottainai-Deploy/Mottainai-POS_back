@@ -142,7 +142,22 @@ public sealed class ShiftController(LocalStore store, OutboxRepository outbox, P
         await using var db = await store.OpenConnectionAsync(ct); using var tx = db.BeginTransaction();
         await using var check = db.CreateCommand(); check.Transaction = tx; check.CommandText = "SELECT 1 FROM local_shift WHERE local_shift_id=$id AND employee_id=$employee AND status='OPEN'"; check.Parameters.AddWithValue("$id", shiftId); check.Parameters.AddWithValue("$employee", Employee); if (await check.ExecuteScalarAsync(ct) is null) return NotFound();
         var at = DateTimeOffset.UtcNow; await using var insert = db.CreateCommand(); insert.Transaction = tx; insert.CommandText = "INSERT INTO local_cash_movement(shift_id,employee_id,movement_type,amount,reason_ciphertext,observation_ciphertext,movement_date,sync_state) VALUES($shift,$employee,$type,$amount,$reason,$obs,$at,'PENDING'); SELECT last_insert_rowid();"; insert.Parameters.AddWithValue("$shift", shiftId); insert.Parameters.AddWithValue("$employee", Employee); insert.Parameters.AddWithValue("$type", type); insert.Parameters.AddWithValue("$amount", request.Amount.ToString(System.Globalization.CultureInfo.InvariantCulture)); insert.Parameters.AddWithValue("$reason", store.Protect(request.Reason)); insert.Parameters.AddWithValue("$obs", (object?)(request.Observation is null ? null : store.Protect(request.Observation)) ?? DBNull.Value); insert.Parameters.AddWithValue("$at", at.ToString("O")); var movementId = Convert.ToInt32(await insert.ExecuteScalarAsync(ct));
-        await Enqueue(db,tx,"cash_movement", movementId, type, new { shiftId, employeeId = Employee, amount = request.Amount, reason = request.Reason, observation = request.Observation, movementDate = at }, requestKey.ToString("D"), ct); tx.Commit();
+        await Enqueue(db,tx,"cash_movement", movementId, type, new { shiftId, employeeId = Employee, amount = request.Amount, reason = request.Reason, observation = request.Observation, movementDate = at }, requestKey.ToString("D"), ct);
+        var eventId = requestKey.ToString("D");
+        var notificationPayload = JsonSerializer.Serialize(new { eventId, storeId = int.Parse(User.FindFirstValue("store_id")!), employeeId = Employee, localMovementId = movementId, movementType = type, amount = request.Amount, reason = request.Reason, movementDate = at });
+        await using (var notification = db.CreateCommand())
+        {
+            notification.Transaction = tx;
+            notification.CommandText = "INSERT INTO cash_movement_notification_outbox(event_id,local_movement_id,terminal_id,employee_id,payload_ciphertext,state,created_at,updated_at) VALUES($event,$movement,$terminal,$employee,$payload,'PENDING',$now,$now)";
+            notification.Parameters.AddWithValue("$event", eventId);
+            notification.Parameters.AddWithValue("$movement", movementId);
+            notification.Parameters.AddWithValue("$terminal", Terminal);
+            notification.Parameters.AddWithValue("$employee", Employee);
+            notification.Parameters.AddWithValue("$payload", store.Protect(notificationPayload));
+            notification.Parameters.AddWithValue("$now", at.ToString("O"));
+            await notification.ExecuteNonQueryAsync(ct);
+        }
+        tx.Commit();
         return Accepted(new { movementId, shiftId, type, request.Amount, movementDate = at, syncState = "PENDING" });
     }
 
