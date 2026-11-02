@@ -45,7 +45,7 @@ paths:
   /shifts/{shiftId}/cash-withdrawals:
     post: { summary: Registrar sangria, parameters: [{ in: path, name: shiftId, required: true, schema: { type: integer } }], responses: { '202': { description: Movimento enfileirado; o aviso aos gerentes é enviado após a sincronização online } } }
   /shifts/{shiftId}/cash-deposits:
-    post: { summary: Registrar suprimento, parameters: [{ in: path, name: shiftId, required: true, schema: { type: integer } }], responses: { '202': { description: Enfileirado para sincronização } } }
+    post: { summary: Registrar suprimento, parameters: [{ in: path, name: shiftId, required: true, schema: { type: integer } }], responses: { '202': { description: Movimento enfileirado; o aviso aos gerentes é enviado após a sincronização online } } }
   /sales:
     get: { summary: Consultar vendas e rascunhos locais, responses: { '200': { description: Vendas em cache } } }
     post: { summary: Iniciar venda em rascunho, responses: { '201': { description: Rascunho criado }, '409': { description: Turno aberto obrigatório } } }
