@@ -92,7 +92,48 @@ public sealed class SalesController(LocalStore store, OutboxRepository outbox, O
         using var tx=db.BeginTransaction();
         await using var sale=db.CreateCommand(); sale.Transaction=tx; sale.CommandText="SELECT 1 FROM local_sale WHERE local_sale_id=$id AND employee_id=$employee AND status='DRAFT'"; sale.Parameters.AddWithValue("$id",saleId); sale.Parameters.AddWithValue("$employee",Employee); if(await sale.ExecuteScalarAsync(ct) is null)return NotFound();
         await using var seq=db.CreateCommand();seq.Transaction=tx;seq.CommandText="UPDATE local_sequence SET next_value=next_value-1 WHERE sequence_name='sale_item' RETURNING next_value+1";var itemId=Convert.ToInt32(await seq.ExecuteScalarAsync(ct));var now=DateTimeOffset.UtcNow;
-        await using var insert=db.CreateCommand();insert.Transaction=tx;insert.CommandText="INSERT INTO local_sale_item(local_sale_item_id,sale_id,product_id,quantity,unit_price,sync_state,updated_at) VALUES($id,$sale,$product,$quantity,$price,'PENDING',$at)";insert.Parameters.AddWithValue("$id",itemId);insert.Parameters.AddWithValue("$sale",saleId);insert.Parameters.AddWithValue("$product",request.ProductId);insert.Parameters.AddWithValue("$quantity",request.Quantity.ToString(System.Globalization.CultureInfo.InvariantCulture));insert.Parameters.AddWithValue("$price",price.Value.AppliedPrice.ToString(System.Globalization.CultureInfo.InvariantCulture));insert.Parameters.AddWithValue("$at",now.ToString("O"));await insert.ExecuteNonQueryAsync(ct);await Enqueue(db,tx,itemId,"ADD_SALE_ITEM",new{saleId,itemId,employeeId=Employee,productId=request.ProductId,quantity=request.Quantity,unitPrice=price.Value.AppliedPrice},requestKey.ToString("D"),ct);tx.Commit();return Accepted(new{itemId,saleId,request.ProductId,request.Quantity,unitPrice=price.Value.AppliedPrice,normalPrice=price.Value.Product.NormalPrice,promotionId=price.Value.PromotionId,syncState="PENDING"});
+        await using var insert=db.CreateCommand();insert.Transaction=tx;insert.CommandText="INSERT INTO local_sale_item(local_sale_item_id,sale_id,product_id,quantity,unit_price,sync_state,updated_at) VALUES($id,$sale,$product,$quantity,$price,'PENDING',$at)";insert.Parameters.AddWithValue("$id",itemId);insert.Parameters.AddWithValue("$sale",saleId);insert.Parameters.AddWithValue("$product",request.ProductId);insert.Parameters.AddWithValue("$quantity",request.Quantity.ToString(System.Globalization.CultureInfo.InvariantCulture));insert.Parameters.AddWithValue("$price",price.Value.AppliedPrice.ToString(System.Globalization.CultureInfo.InvariantCulture));insert.Parameters.AddWithValue("$at",now.ToString("O"));await insert.ExecuteNonQueryAsync(ct);await Enqueue(db,tx,itemId,"ADD_SALE_ITEM",new{saleId,itemId,employeeId=Employee,productId=request.ProductId,quantity=request.Quantity,unitPrice=price.Value.AppliedPrice},requestKey.ToString("D"),ct);tx.Commit();return Accepted(new{itemId,saleId,request.ProductId,request.Quantity,unitPrice=price.Value.AppliedPrice,normalPrice=price.Value.Product.NormalPrice,promotionalPrice=price.Value.PromotionId is null?(decimal?)null:price.Value.AppliedPrice,promotionId=price.Value.PromotionId,syncState="PENDING"});
+    }
+
+    [HttpPost("{saleId:int}/completion-simulation")]
+    public async Task<IActionResult> SimulateCompletion(int saleId, CancellationToken ct)
+    {
+        await using var db = await store.OpenConnectionAsync(ct);
+        await using var saleCommand = db.CreateCommand();
+        saleCommand.CommandText = "SELECT status FROM local_sale WHERE local_sale_id=$id AND employee_id=$employee";
+        saleCommand.Parameters.AddWithValue("$id", saleId);
+        saleCommand.Parameters.AddWithValue("$employee", Employee);
+        var status = await saleCommand.ExecuteScalarAsync(ct);
+        if (status is null) return NotFound();
+        if (!string.Equals(Convert.ToString(status), "DRAFT", StringComparison.Ordinal))
+            return Conflict(new { error = "sale_must_be_draft" });
+
+        await using var itemsCommand = db.CreateCommand();
+        itemsCommand.CommandText = "SELECT quantity,unit_price FROM local_sale_item WHERE sale_id=$id ORDER BY local_sale_item_id";
+        itemsCommand.Parameters.AddWithValue("$id", saleId);
+        await using var reader = await itemsCommand.ExecuteReaderAsync(ct);
+        var itemCount = 0;
+        decimal totalAmount = 0;
+        while (await reader.ReadAsync(ct))
+        {
+            var quantity = decimal.Parse(reader.GetString(0), System.Globalization.CultureInfo.InvariantCulture);
+            var unitPrice = decimal.Parse(reader.GetString(1), System.Globalization.CultureInfo.InvariantCulture);
+            totalAmount += quantity * unitPrice;
+            itemCount++;
+        }
+        if (itemCount == 0) return Conflict(new { error = "sale_has_no_items" });
+
+        return Ok(new
+        {
+            saleId,
+            status = "SIMULATED",
+            simulation = true,
+            persisted = false,
+            realPaymentProcessed = false,
+            itemCount,
+            totalAmount,
+            completedAt = DateTimeOffset.UtcNow
+        });
     }
 
     [HttpPatch("{saleId:int}/items/{itemId:int}")]

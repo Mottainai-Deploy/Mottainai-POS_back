@@ -26,6 +26,7 @@ public sealed class OutboxSyncService(
                     {
                         await TryDispatchApprovalAsync(store, postgres, approvalCloud, stoppingToken);
                         await TrySyncApprovalDecisionsAsync(store, postgres, approvalCloud, stoppingToken);
+                        await DispatchPendingCashMovementNotificationsAsync(store, postgres, approvalCloud, stoppingToken);
                     }
                     var processed = await ProcessNextAsync(store, postgres, stoppingToken);
                     if (processed) continue;
@@ -219,6 +220,122 @@ public sealed class OutboxSyncService(
             await scope.CommitAsync(ct);
             await MarkSyncedAsync(store, operation, remoteId, partitionDate, ct);
             return true;
+        }
+    }
+
+    private async Task DispatchPendingCashMovementNotificationsAsync(LocalStore store,
+        PostgresRequestScopeFactory postgres, PosApprovalCloudClient cloud, CancellationToken ct)
+    {
+        List<PendingCashMovementNotification> pending = [];
+        await using (var db = await store.OpenConnectionAsync(ct))
+        await using (var command = db.CreateCommand())
+        {
+            command.CommandText = """
+                SELECT n.event_id,n.terminal_id,n.employee_id,n.payload_ciphertext,n.created_at,m.remote_movement_id
+                FROM cash_movement_notification_outbox n
+                JOIN local_cash_movement m ON m.local_movement_id=n.local_movement_id
+                WHERE n.state='PENDING' AND m.sync_state='SYNCED' AND m.remote_movement_id IS NOT NULL
+                ORDER BY n.created_at
+                LIMIT 25
+                """;
+            await using var reader = await command.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+                pending.Add(new PendingCashMovementNotification(reader.GetString(0), reader.GetInt32(1),
+                    reader.GetInt32(2), (byte[])reader[3], reader.GetString(4), reader.GetInt32(5)));
+        }
+
+        foreach (var item in pending)
+        {
+            var errorCode = "DISPATCH_FAILED";
+            var delivered = false;
+            try
+            {
+                var payloadText = store.Unprotect(item.PayloadCiphertext);
+                var payload = JsonSerializer.Deserialize<CashMovementNotificationPayload>(
+                    payloadText, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+                if (payload is null) throw new InvalidOperationException("Cash movement notification payload is empty.");
+
+                var uid = await FindUidAsync(store, item.TerminalId, item.EmployeeId,
+                    DateTimeOffset.Parse(item.CreatedAt), ct);
+                if (uid is null)
+                {
+                    errorCode = "OPERATOR_SESSION_NOT_FOUND";
+                }
+                else
+                {
+                    await using var scope = await postgres.OpenStaffScopeAsync(uid, ct);
+                    if (scope is null)
+                    {
+                        errorCode = "OPERATIONAL_SESSION_UNAVAILABLE";
+                    }
+                    else
+                    {
+                        var recipients = new List<PosApprovalRecipient>();
+                        await using (var managers = new NpgsqlCommand("""
+                            SELECT DISTINCT s.company_id,u.user_id
+                            FROM mottainai.employee e
+                            JOIN mottainai.app_user u ON u.employee_id=e.employee_id
+                            JOIN mottainai.employee_role role ON role.role_id=e.role_id
+                            JOIN mottainai.retail_store s ON s.store_id=e.store_id
+                            WHERE e.store_id=$1 AND e.active AND u.active AND role.active AND s.active
+                              AND e.deleted_at IS NULL AND u.deleted_at IS NULL
+                              AND role.deleted_at IS NULL AND s.deleted_at IS NULL
+                              AND UPPER(role.name) IN ('GERENTE','DONO','MANAGER','OWNER')
+                            ORDER BY u.user_id
+                            """, scope.Connection, scope.Transaction))
+                        {
+                            managers.Parameters.AddWithValue(payload.StoreId);
+                            await using var reader = await managers.ExecuteReaderAsync(ct);
+                            while (await reader.ReadAsync(ct))
+                                recipients.Add(new PosApprovalRecipient(reader.GetInt32(0), reader.GetInt32(1)));
+                        }
+                        await scope.CommitAsync(ct);
+                        if (recipients.Count == 0)
+                        {
+                            errorCode = "NO_ACTIVE_MANAGER";
+                        }
+                        else
+                        {
+                            await cloud.DispatchCashMovementAsync(new PosCashMovementNotification(
+                                Guid.Parse(item.EventId), payload.StoreId, payload.EmployeeId,
+                                item.RemoteMovementId, payload.MovementType, payload.Amount,
+                                payload.Reason, payload.MovementDate, recipients), ct);
+                            delivered = true;
+                            errorCode = "";
+                        }
+                    }
+                }
+            }
+            catch (HttpRequestException ex)
+            {
+                errorCode = ex.StatusCode is { } status ? $"HTTP_{(int)status}" : "HTTP_TRANSPORT";
+            }
+            catch (TaskCanceledException) when (!ct.IsCancellationRequested)
+            {
+                errorCode = "HTTP_TIMEOUT";
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                errorCode = "DISPATCH_FAILED";
+                logger.LogWarning("Cash movement notification delivery deferred ({ExceptionType}).", ex.GetType().Name);
+            }
+
+            await using var local = await store.OpenConnectionAsync(ct);
+            await using var update = local.CreateCommand();
+            update.CommandText = """
+                UPDATE cash_movement_notification_outbox
+                SET state=CASE WHEN $delivered THEN 'DELIVERED' ELSE 'PENDING' END,
+                    attempts=attempts+1,last_error_code=$error,
+                    delivered_at=CASE WHEN $delivered THEN $now ELSE delivered_at END,
+                    updated_at=$now
+                WHERE event_id=$event
+                """;
+            update.Parameters.AddWithValue("$delivered", delivered);
+            update.Parameters.AddWithValue("$error", string.IsNullOrEmpty(errorCode) ? DBNull.Value : errorCode);
+            update.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("O"));
+            update.Parameters.AddWithValue("$event", item.EventId);
+            await update.ExecuteNonQueryAsync(ct);
         }
     }
 
@@ -575,6 +692,8 @@ public sealed class OutboxSyncService(
     }
 
     private sealed record PendingOperation(long Sequence, string OperationId, string Key, int TerminalId, string EntityType, int LocalEntityId, string Type, JsonDocument Document, string Hash, DateTimeOffset CreatedAt);
+    private sealed record PendingCashMovementNotification(string EventId,int TerminalId,int EmployeeId,byte[] PayloadCiphertext,string CreatedAt,int RemoteMovementId);
+    private sealed record CashMovementNotificationPayload(string EventId,int StoreId,int EmployeeId,int LocalMovementId,string MovementType,decimal Amount,string Reason,DateTimeOffset MovementDate);
     private sealed record RemoteSale(int SaleId,DateTimeOffset SaleDate);
     private sealed record PendingApproval(Guid RequestId,int StoreId,string RequestType,int SaleId,
         DateTime SaleDate,int? SaleItemId,int? CancellationRequestId,decimal? DiscountPercent);

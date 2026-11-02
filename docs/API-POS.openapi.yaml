@@ -43,16 +43,18 @@ paths:
   /shifts/{shiftId}/cash-movements:
     get: { summary: Listar movimentações, parameters: [{ in: path, name: shiftId, required: true, schema: { type: integer } }], responses: { '200': { description: Movimentações locais } } }
   /shifts/{shiftId}/cash-withdrawals:
-    post: { summary: Registrar sangria, parameters: [{ in: path, name: shiftId, required: true, schema: { type: integer } }], responses: { '202': { description: Enfileirado para sincronização } } }
+    post: { summary: Registrar sangria, parameters: [{ in: path, name: shiftId, required: true, schema: { type: integer } }], responses: { '202': { description: Movimento enfileirado; o aviso aos gerentes é enviado após a sincronização online } } }
   /shifts/{shiftId}/cash-deposits:
-    post: { summary: Registrar suprimento, parameters: [{ in: path, name: shiftId, required: true, schema: { type: integer } }], responses: { '202': { description: Enfileirado para sincronização } } }
+    post: { summary: Registrar suprimento, parameters: [{ in: path, name: shiftId, required: true, schema: { type: integer } }], responses: { '202': { description: Movimento enfileirado; o aviso aos gerentes é enviado após a sincronização online } } }
   /sales:
     get: { summary: Consultar vendas e rascunhos locais, responses: { '200': { description: Vendas em cache } } }
     post: { summary: Iniciar venda em rascunho, responses: { '201': { description: Rascunho criado }, '409': { description: Turno aberto obrigatório } } }
   /sales/{saleId}:
     get: { summary: Consultar venda ou carrinho, parameters: [{ in: path, name: saleId, required: true, schema: { type: integer } }], responses: { '200': { description: Venda e itens }, '404': { description: Não encontrada } } }
   /sales/{saleId}/items:
-    post: { summary: Adicionar produto ao rascunho com preço normal ou promoção elegível, parameters: [{ in: path, name: saleId, required: true, schema: { type: integer } }], responses: { '202': { description: Item enfileirado }, '404': { description: Produto fora do cache } } }
+    post: { summary: Adicionar produto ao rascunho com preço normal ou promoção elegível, parameters: [{ in: path, name: saleId, required: true, schema: { type: integer } }], responses: { '202': { description: A resposta inclui unitPrice (preço aplicado), normalPrice, promotionalPrice (null sem promoção) e promotionId (null sem promoção) }, '404': { description: Produto fora do cache } } }
+  /sales/{saleId}/completion-simulation:
+    post: { summary: Simular a conclusão do rascunho sem pagamento ou persistência real, parameters: [{ in: path, name: saleId, required: true, schema: { type: integer } }], responses: { '200': { description: Resultado simulado; não grava venda nem pagamento }, '404': { description: Venda não encontrada }, '409': { description: Rascunho inválido ou sem itens } } }
   /sales/{saleId}/items/{itemId}:
     patch: { summary: Alterar quantidade do item, parameters: [{ in: path, name: saleId, required: true, schema: { type: integer } }, { in: path, name: itemId, required: true, schema: { type: integer } }], responses: { '202': { description: Alteração enfileirada }, '404': { description: Item não encontrado } } }
   /approvals:

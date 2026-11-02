@@ -17,6 +17,17 @@ public sealed record PosApprovalNotification(
 
 public sealed record PosApprovalRecipient(long CompanyId, long UserId);
 
+public sealed record PosCashMovementNotification(
+    Guid EventId,
+    int StoreId,
+    int EmployeeId,
+    int MovementId,
+    string MovementType,
+    decimal Amount,
+    string Reason,
+    DateTimeOffset MovementDate,
+    IReadOnlyList<PosApprovalRecipient> Recipients);
+
 public sealed record PosApprovalDecision(
     Guid RequestId,
     string Status,
@@ -49,6 +60,30 @@ public sealed class PosApprovalCloudClient(HttpClient http, IConfiguration confi
             requestedAmount = request.RequestedAmount,
             discountPercent = request.DiscountPercent,
             recipients = request.Recipients.Select(recipient => new
+            {
+                companyId = recipient.CompanyId,
+                userId = recipient.UserId
+            })
+        });
+        using var response = await http.SendAsync(message, ct);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task DispatchCashMovementAsync(PosCashMovementNotification notification, CancellationToken ct)
+    {
+        EnsureConfigured();
+        using var message = CreateMessage(new
+        {
+            operation = "cash_movement",
+            eventId = notification.EventId,
+            storeID = notification.StoreId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            employeeId = notification.EmployeeId,
+            movementId = notification.MovementId,
+            movementType = notification.MovementType,
+            amount = notification.Amount,
+            reason = notification.Reason,
+            movementDate = notification.MovementDate,
+            recipients = notification.Recipients.Select(recipient => new
             {
                 companyId = recipient.CompanyId,
                 userId = recipient.UserId
