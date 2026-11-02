@@ -43,7 +43,7 @@ paths:
   /shifts/{shiftId}/cash-movements:
     get: { summary: Listar movimentações, parameters: [{ in: path, name: shiftId, required: true, schema: { type: integer } }], responses: { '200': { description: Movimentações locais } } }
   /shifts/{shiftId}/cash-withdrawals:
-    post: { summary: Registrar sangria, parameters: [{ in: path, name: shiftId, required: true, schema: { type: integer } }], responses: { '202': { description: Enfileirado para sincronização } } }
+    post: { summary: Registrar sangria, parameters: [{ in: path, name: shiftId, required: true, schema: { type: integer } }], responses: { '202': { description: Movimento enfileirado; o aviso aos gerentes é enviado após a sincronização online } } }
   /shifts/{shiftId}/cash-deposits:
     post: { summary: Registrar suprimento, parameters: [{ in: path, name: shiftId, required: true, schema: { type: integer } }], responses: { '202': { description: Enfileirado para sincronização } } }
   /sales:
